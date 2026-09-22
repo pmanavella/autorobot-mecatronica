@@ -5,34 +5,35 @@
   - Controla 2 motores DC a través de un driver L9110S (PWM + dirección).
   - Lee un sensor ultrasónico (HC-SR04 o similar) para medir distancia al frente.
   - Hace parpadear un LED SOLO mientras las ruedas se están moviendo.
-  - Se controla desde una página web por Bluetooth (BLE), con dos modos:
+  - Crea su propia red WiFi ("AutoRobot") y sirve la página de control
+    en http://192.168.4.1 (la página está en src/pagina.h).
+  - Dos modos:
       * Manual (M): el auto obedece las flechas de la web.
         Si hay un obstáculo cerca, no deja avanzar (sí retroceder o girar).
       * Automático (A): avanza solo y esquiva obstáculos.
-  - Le manda a la web la distancia medida, si se mueve, el LED y el modo.
 
-  Órdenes que recibe desde la web (texto):
-    F = adelante, B = atrás, L = izquierda, R = derecha, S = parar
-    A = modo automático, M = modo manual
-    V:180 = cambiar velocidad (0-255)
-
-  Estado que envía a la web cada 200 ms:
-    "E:distancia,moviendo,led,modo"   ej: "E:42,1,0,M"
+  Pedidos que atiende (HTTP):
+    /             -> la página de control
+    /cmd?o=F      -> orden: F adelante, B atrás, L izquierda, R derecha, S parar,
+                     A automático, M manual, V:180 velocidad (0-255)
+    /estado       -> solo devuelve el estado
+  Cada respuesta es el estado: "E:distancia,moviendo,led,modo"  ej: "E:42,1,0,M"
 */
 
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include "pagina.h"
 
 // ---------- PINES: MOTOR A (rueda izquierda) ----------
-#define MOTOR_A_IN1 27
-#define MOTOR_A_IN2 26
+// IN1 e IN2 invertidos respecto al cableado original porque
+// los motores giraban al revés (adelante iba hacia atrás).
+#define MOTOR_A_IN1 26
+#define MOTOR_A_IN2 27
 
 // ---------- PINES: MOTOR B (rueda derecha) ----------
-#define MOTOR_B_IN1 25
-#define MOTOR_B_IN2 33
+#define MOTOR_B_IN1 33
+#define MOTOR_B_IN2 25
 
 // ---------- PINES: SENSOR ULTRASÓNICO ----------
 #define TRIG_PIN 5
@@ -51,31 +52,30 @@
 #define PWM_FREQ 5000
 #define PWM_RESOLUTION 8   // 0-255
 
-// ---------- BLUETOOTH (tienen que coincidir con la web) ----------
-#define NOMBRE_BLE    "AutoRobot"
-#define SERVICIO_UUID "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
-#define RX_UUID       "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  // web -> ESP32
-#define TX_UUID       "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  // ESP32 -> web
+// ---------- RED WIFI QUE CREA EL AUTO ----------
+const char *WIFI_NOMBRE = "AutoRobot";
+const char *WIFI_CLAVE  = "robot1234";   // mínimo 8 caracteres
 
 // ---------- PARÁMETROS DE COMPORTAMIENTO ----------
 const int VELOCIDAD_CRUCERO = 180;              // velocidad inicial (0-255)
 const int DISTANCIA_MINIMA_CM = 15;             // distancia a la que esquiva / frena
 const unsigned long BLINK_INTERVAL_MS = 250;    // parpadeo del LED al moverse
-const unsigned long TIEMPO_SEGURIDAD_MS = 600;  // en manual: sin órdenes -> frena
+const unsigned long TIEMPO_SEGURIDAD_MS = 600;  // manual: sin órdenes -> frena
+const unsigned long TIEMPO_SIN_WEB_MS = 3000;   // automático: si la web desaparece -> frena
 
-// ---------- ESTADO INTERNO ----------
+// ---------- ESTADO ----------
 bool robotEnMovimiento = false;
 bool ledEncendido = false;
 unsigned long ultimoBlink = 0;
 long distanciaActual = -1;
 
-// ---------- ESTADO QUE CAMBIA LA WEB (se modifica desde el Bluetooth) ----------
-BLECharacteristic *txChar = nullptr;
-volatile bool conectado = false;
-volatile char modo = 'M';          // 'M' manual, 'A' automático
-volatile char ordenManual = 'S';   // última flecha apretada en la web
-volatile int velocidad = VELOCIDAD_CRUCERO;
-volatile unsigned long ultimaOrden = 0;
+char modo = 'M';          // 'M' manual, 'A' automático
+char ordenManual = 'S';   // última flecha recibida
+int velocidad = VELOCIDAD_CRUCERO;
+unsigned long ultimaOrden = 0;     // última flecha / orden recibida
+unsigned long ultimoContacto = 0;  // último pedido cualquiera de la web
+
+WebServer server(80);
 
 // =================================================================
 //  CONTROL DE MOTORES
@@ -170,77 +170,72 @@ void actualizarLed() {
 }
 
 // =================================================================
-//  COMUNICACIÓN CON LA WEB
+//  SERVIDOR WEB
 // =================================================================
 
-// Cada 200 ms le cuenta a la web qué está pasando (y lo imprime por Serial)
-void enviarEstado() {
-  static unsigned long ultimoEnvio = 0;
-  unsigned long ahora = millis();
-  if (ahora - ultimoEnvio < 200) return;
-  ultimoEnvio = ahora;
-
+String textoEstado() {
   char msg[32];
   snprintf(msg, sizeof(msg), "E:%ld,%d,%d,%c",
-           distanciaActual, robotEnMovimiento, ledEncendido, (char)modo);
-
-  if (conectado && txChar != nullptr) {
-    txChar->setValue((uint8_t *)msg, strlen(msg));
-    txChar->notify();
-  }
-  Serial.println(msg);  // debug en el Monitor Serie
+           distanciaActual, robotEnMovimiento, ledEncendido, modo);
+  return String(msg);
 }
 
-class ServidorCB : public BLEServerCallbacks {
-  void onConnect(BLEServer *s) {
-    conectado = true;
-    Serial.println("Web conectada");
-  }
-  void onDisconnect(BLEServer *s) {
-    conectado = false;
-    modo = 'M';           // por seguridad, si se pierde la web, frena
+void procesarOrden(String orden) {
+  orden.trim();
+  if (orden.length() == 0) return;
+  ultimaOrden = millis();
+
+  if (orden.startsWith("V:")) {
+    velocidad = constrain(orden.substring(2).toInt(), 0, 255);
+  } else if (orden == "A") {
+    modo = 'A';
+  } else if (orden == "M") {
+    modo = 'M';
     ordenManual = 'S';
-    Serial.println("Web desconectada");
-    BLEDevice::startAdvertising();  // para poder volver a conectar
+  } else if (orden.length() == 1 && strchr("FBLRS", orden[0])) {
+    modo = 'M';            // tocar una flecha toma el control manual
+    ordenManual = orden[0];
   }
-};
+}
 
-class OrdenesCB : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *c) {
-    String orden = c->getValue().c_str();
-    orden.trim();
-    ultimaOrden = millis();
+void responderEstado() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/plain", textoEstado());
+}
 
-    if (orden.startsWith("V:")) {
-      velocidad = constrain(orden.substring(2).toInt(), 0, 255);
-    } else if (orden == "A") {
-      modo = 'A';
-    } else if (orden == "M") {
-      modo = 'M';
-      ordenManual = 'S';
-    } else if (orden.length() == 1 && strchr("FBLRS", orden[0])) {
-      modo = 'M';          // tocar una flecha toma el control manual
-      ordenManual = orden[0];
-    }
-  }
-};
+void handlePagina() {
+  server.send_P(200, "text/html", PAGINA);
+}
 
-void iniciarBluetooth() {
-  BLEDevice::init(NOMBRE_BLE);
-  BLEServer *servidor = BLEDevice::createServer();
-  servidor->setCallbacks(new ServidorCB());
+void handleCmd() {
+  ultimoContacto = millis();
+  procesarOrden(server.arg("o"));
+  responderEstado();
+}
 
-  BLEService *servicio = servidor->createService(SERVICIO_UUID);
-  txChar = servicio->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  txChar->addDescriptor(new BLE2902());
+void handleEstado() {
+  ultimoContacto = millis();
+  responderEstado();
+}
 
-  BLECharacteristic *rx = servicio->createCharacteristic(
-      RX_UUID, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
-  rx->setCallbacks(new OrdenesCB());
-  servicio->start();
+void iniciarWifi() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(WIFI_NOMBRE, WIFI_CLAVE);
+  // Menos potencia = menos consumo de corriente (alcanza de sobra para un aula)
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
-  BLEDevice::getAdvertising()->setScanResponse(true);
-  BLEDevice::startAdvertising();
+  server.on("/", handlePagina);
+  server.on("/cmd", handleCmd);
+  server.on("/estado", handleEstado);
+  server.onNotFound([]() { server.send(404, "text/plain", "No existe"); });
+  server.begin();
+
+  Serial.print("Red WiFi: ");
+  Serial.print(WIFI_NOMBRE);
+  Serial.print("  |  Clave: ");
+  Serial.println(WIFI_CLAVE);
+  Serial.print("Abrir en el navegador: http://");
+  Serial.println(WiFi.softAPIP());
 }
 
 // =================================================================
@@ -251,13 +246,13 @@ void iniciarBluetooth() {
 void esperar(unsigned long ms) {
   unsigned long t0 = millis();
   while (millis() - t0 < ms && modo == 'A') {
+    server.handleClient();
     actualizarLed();
-    enviarEstado();
     delay(1);
   }
 }
 
-// Su comportamiento original: avanza y esquiva
+// Comportamiento original: avanza y esquiva
 void modoAutomatico(bool obstaculo) {
   if (!obstaculo) {
     avanzar(velocidad);
@@ -278,10 +273,9 @@ void modoAutomatico(bool obstaculo) {
 // Obedece a la web
 void modoManual(bool obstaculo) {
   char orden = ordenManual;
-  unsigned long t = ultimaOrden;
 
-  // Si la web deja de mandar órdenes (se soltó la flecha o se cortó), frena
-  if (orden != 'S' && millis() - t > TIEMPO_SEGURIDAD_MS) {
+  // Si la web deja de mandar la flecha (se soltó o se cortó el WiFi), frena
+  if (orden != 'S' && millis() - ultimaOrden > TIEMPO_SEGURIDAD_MS) {
     ordenManual = 'S';
     orden = 'S';
   }
@@ -313,11 +307,13 @@ void setup() {
   ledcAttachPin(MOTOR_B_IN2, CH_MOTOR_B2);
 
   detenerMotores();
-  iniciarBluetooth();
-  Serial.println("Robot listo. Esperando la web por Bluetooth...");
+  Serial.println("Robot listo.");
+  iniciarWifi();
 }
 
 void loop() {
+  server.handleClient();
+
   // Medimos distancia cada 60 ms (el sensor necesita ese tiempo entre lecturas)
   static unsigned long ultimaMedicion = 0;
   if (millis() - ultimaMedicion >= 60) {
@@ -326,9 +322,21 @@ void loop() {
   }
   bool obstaculo = distanciaActual > 0 && distanciaActual < DISTANCIA_MINIMA_CM;
 
+  // Seguridad: si en automático la web deja de responder, frena
+  if (modo == 'A' && millis() - ultimoContacto > TIEMPO_SIN_WEB_MS) {
+    modo = 'M';
+    ordenManual = 'S';
+  }
+
   if (modo == 'A') modoAutomatico(obstaculo);
   else             modoManual(obstaculo);
 
   actualizarLed();
-  enviarEstado();
+
+  // Debug por Serial cada medio segundo
+  static unsigned long ultimoPrint = 0;
+  if (millis() - ultimoPrint >= 500) {
+    ultimoPrint = millis();
+    Serial.println(textoEstado());
+  }
 }
