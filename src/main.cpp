@@ -36,8 +36,8 @@
 #define MOTOR_B_IN2 25
 
 // ---------- PINES: SENSOR ULTRASÓNICO ----------
-#define TRIG_PIN 5
-#define ECHO_PIN 18
+#define TRIG_PIN 32
+#define ECHO_PIN 35
 
 // ---------- PIN: LED indicador de movimiento ----------
 // GPIO2 = LED integrado de la placa. Cuando conecten un LED externo
@@ -58,7 +58,7 @@ const char *WIFI_CLAVE  = "robot1234";   // mínimo 8 caracteres
 
 // ---------- PARÁMETROS DE COMPORTAMIENTO ----------
 const int VELOCIDAD_CRUCERO = 180;              // velocidad inicial (0-255)
-const int DISTANCIA_MINIMA_CM = 15;             // distancia a la que esquiva / frena
+const int DISTANCIA_MINIMA_CM = 25;             // distancia a la que esquiva / frena
 const unsigned long BLINK_INTERVAL_MS = 250;    // parpadeo del LED al moverse
 const unsigned long TIEMPO_SEGURIDAD_MS = 600;  // manual: sin órdenes -> frena
 const unsigned long TIEMPO_SIN_WEB_MS = 3000;   // automático: si la web desaparece -> frena
