@@ -74,6 +74,11 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   .velocidad label { display: flex; justify-content: space-between; font-size: .9rem; margin-bottom: 8px; }
   .velocidad output { font-weight: 700; color: var(--key); }
   input[type="range"] { width: 100%; accent-color: var(--key); }
+  .apagar { display: block; width: 100%; margin-top: 22px; padding: 14px; border: 0; border-radius: 14px;
+    background: var(--stop); color: #fff; font-weight: 700; font-size: 1rem; box-shadow: 0 5px 0 var(--stop-lo); }
+  .apagar:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--stop-lo); }
+  .apagar.encender { background: var(--ok); color: var(--ink); box-shadow: 0 5px 0 #23945A; }
+  .control.off .pad, .control.off .modos, .control.off .velocidad { opacity: .35; pointer-events: none; }
   .info { width: 100%; max-width: 440px; margin-top: 18px; font-size: .9rem; color: var(--muted); line-height: 1.5; }
   .info p { margin: 0 0 6px; } .info strong { color: var(--ink); }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -112,20 +117,23 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   </div>
 
   <div class="velocidad">
-    <label for="vel">Velocidad <output id="velTxt" for="vel">180</output></label>
-    <input type="range" id="vel" min="80" max="255" value="180">
+    <label for="vel">Velocidad <output id="velTxt" for="vel">10</output></label>
+    <input type="range" id="vel" min="0" max="20" step="1" value="10">
   </div>
+
+  <button class="apagar" id="btnApagar">&#x23FB; Apagar</button>
 </main>
 
 <section class="info">
   <p>Última orden: <strong id="ultima">ninguna</strong></p>
   <p>Mantené apretada una flecha para mover el auto; al soltarla, frena.
      En modo automático avanza solo y esquiva obstáculos; tocar una flecha lo vuelve a manual.
-     Con teclado: flechas o W A S D, y barra espaciadora para parar.</p>
+     Con teclado: flechas o W A S D, y barra espaciadora para parar.
+     Con "Apagar" el auto frena y no obedece nada hasta tocar "Encender".</p>
 </section>
 
 <script>
-  const DISTANCIA_MINIMA = 15;  // igual que DISTANCIA_MINIMA_CM en main.cpp
+  const DISTANCIA_MINIMA = 25;  // igual que DISTANCIA_MINIMA_CM en main.cpp
   const NOMBRES = { F: 'Adelante', B: 'Atrás', L: 'Izquierda', R: 'Derecha', S: 'Parar', A: 'Modo automático', M: 'Modo manual' };
   const TECLAS  = { arrowup: 'F', w: 'F', arrowdown: 'B', s: 'B', arrowleft: 'L', a: 'L', arrowright: 'R', d: 'R', ' ': 'S' };
   const $ = id => document.getElementById(id);
@@ -133,6 +141,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   let dirActual = 'S', modo = 'M', modoLocalHasta = 0;
   let cola = [];            // órdenes sueltas que no se pueden perder (parar, modo, velocidad)
   let ocupado = false, apurar = false, ultimaRespuesta = 0;
+  let apagado = false, apagadoLocalHasta = 0, nivelSincronizado = false;
 
   // ================= Comunicación con la ESP32 =================
   // Se hace un pedido a la vez. Cada respuesta trae el estado del auto.
@@ -174,6 +183,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
     $('pad').classList.toggle('auto', m === 'A');
   }
   function elegirModo(m) {
+    if (apagado) return;
     dirActual = 'S'; marcarTecla(null);
     setModo(m); modoLocalHasta = Date.now() + 800;
     $('ultima').textContent = NOMBRES[m];
@@ -187,6 +197,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
     document.querySelectorAll('.tecla').forEach(t => t.classList.toggle('activa', t.dataset.dir === dir));
   }
   function mover(dir) {
+    if (apagado && dir !== 'S') return;
     if (modo === 'A') { setModo('M'); modoLocalHasta = Date.now() + 800; }
     dirActual = dir;
     $('ultima').textContent = NOMBRES[dir];
@@ -223,14 +234,33 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   $('vel').addEventListener('input', () => { $('velTxt').textContent = $('vel').value; });
   $('vel').addEventListener('change', () => { cola.push('V:' + $('vel').value); tick(); });
 
+  // ================= Apagado =================
+  function setApagado(a) {
+    apagado = a;
+    $('btnApagar').innerHTML = a ? '&#x23FB; Encender' : '&#x23FB; Apagar';
+    $('btnApagar').classList.toggle('encender', a);
+    document.querySelector('.control').classList.toggle('off', a);
+  }
+  $('btnApagar').addEventListener('click', () => {
+    const a = !apagado;
+    if (a) { dirActual = 'S'; marcarTecla(null); setModo('M'); }
+    setApagado(a); apagadoLocalHasta = Date.now() + 800;
+    $('ultima').textContent = a ? 'Apagado' : 'Encendido';
+    cola.push(a ? 'OFF' : 'ON'); tick();
+  });
+
   // ================= Estado que responde la ESP32 =================
-  // Formato: "E:distancia,moviendo,led,modo"   ej: "E:42,1,0,M"
+  // Formato: "E:distancia,moviendo,led,modo,apagado,nivel"   ej: "E:42,1,0,M,0,10"
   function procesar(texto) {
     if (!texto.startsWith('E:')) return;
-    const [d, mov, led, m] = texto.slice(2).split(',');
+    const [d, mov, led, m, off, niv] = texto.slice(2).split(',');
     mostrarDistancia(Number(d));
     $('led').classList.toggle('on', led === '1');
     if ((m === 'A' || m === 'M') && m !== modo && Date.now() > modoLocalHasta) setModo(m);
+    if (off !== undefined && (off === '1') !== apagado && Date.now() > apagadoLocalHasta) setApagado(off === '1');
+    if (niv !== undefined && !nivelSincronizado) {   // al abrir la página, toma el nivel que tiene el auto
+      $('vel').value = niv; $('velTxt').textContent = niv; nivelSincronizado = true;
+    }
   }
   function mostrarDistancia(d) {
     const barra = $('barra'), nota = $('nota');

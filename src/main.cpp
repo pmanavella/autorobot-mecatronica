@@ -15,9 +15,11 @@
   Pedidos que atiende (HTTP):
     /             -> la página de control
     /cmd?o=F      -> orden: F adelante, B atrás, L izquierda, R derecha, S parar,
-                     A automático, M manual, V:180 velocidad (0-255)
+                     A automático, M manual, V:10 nivel de velocidad (0-20),
+                     OFF apagar, ON encender
     /estado       -> solo devuelve el estado
-  Cada respuesta es el estado: "E:distancia,moviendo,led,modo"  ej: "E:42,1,0,M"
+  Cada respuesta es el estado: "E:distancia,moviendo,led,modo,apagado,nivel"
+  ej: "E:42,1,0,M,0,10"
 */
 
 #include <Arduino.h>
@@ -57,7 +59,12 @@ const char *WIFI_NOMBRE = "AutoRobot";
 const char *WIFI_CLAVE  = "robot1234";   // mínimo 8 caracteres
 
 // ---------- PARÁMETROS DE COMPORTAMIENTO ----------
-const int VELOCIDAD_CRUCERO = 180;              // velocidad inicial (0-255)
+// Velocidad: la web manda un nivel de 0 a 20, que acá se traduce a PWM 190-210
+// (el rango en el que el auto anda bien).
+const int VEL_PWM_MIN = 190;                    // nivel 0
+const int VEL_PWM_MAX = 210;                    // nivel 20
+const int NIVEL_MAX = 20;
+const int NIVEL_INICIAL = 10;                   // arranca en el medio (PWM 200)
 const int DISTANCIA_MINIMA_CM = 25;             // distancia a la que esquiva / frena
 const unsigned long BLINK_INTERVAL_MS = 250;    // parpadeo del LED al moverse
 const unsigned long TIEMPO_SEGURIDAD_MS = 600;  // manual: sin órdenes -> frena
@@ -71,7 +78,9 @@ long distanciaActual = -1;
 
 char modo = 'M';          // 'M' manual, 'A' automático
 char ordenManual = 'S';   // última flecha recibida
-int velocidad = VELOCIDAD_CRUCERO;
+int nivel = NIVEL_INICIAL;
+int velocidad = VEL_PWM_MIN + NIVEL_INICIAL * (VEL_PWM_MAX - VEL_PWM_MIN) / NIVEL_MAX;
+bool apagado = false;     // botón de apagado de la web: frena todo e ignora órdenes
 unsigned long ultimaOrden = 0;     // última flecha / orden recibida
 unsigned long ultimoContacto = 0;  // último pedido cualquiera de la web
 
@@ -174,9 +183,9 @@ void actualizarLed() {
 // =================================================================
 
 String textoEstado() {
-  char msg[32];
-  snprintf(msg, sizeof(msg), "E:%ld,%d,%d,%c",
-           distanciaActual, robotEnMovimiento, ledEncendido, modo);
+  char msg[48];
+  snprintf(msg, sizeof(msg), "E:%ld,%d,%d,%c,%d,%d",
+           distanciaActual, robotEnMovimiento, ledEncendido, modo, apagado, nivel);
   return String(msg);
 }
 
@@ -186,7 +195,18 @@ void procesarOrden(String orden) {
   ultimaOrden = millis();
 
   if (orden.startsWith("V:")) {
-    velocidad = constrain(orden.substring(2).toInt(), 0, 255);
+    nivel = constrain(orden.substring(2).toInt(), 0, NIVEL_MAX);
+    velocidad = VEL_PWM_MIN + nivel * (VEL_PWM_MAX - VEL_PWM_MIN) / NIVEL_MAX;
+  } else if (orden == "OFF") {
+    apagado = true;
+    modo = 'M';
+    ordenManual = 'S';
+    detenerMotores();
+  } else if (orden == "ON") {
+    apagado = false;
+    ordenManual = 'S';
+  } else if (apagado) {
+    // apagado: se ignoran flechas y cambio de modo hasta tocar "Encender"
   } else if (orden == "A") {
     modo = 'A';
   } else if (orden == "M") {
@@ -328,8 +348,9 @@ void loop() {
     ordenManual = 'S';
   }
 
-  if (modo == 'A') modoAutomatico(obstaculo);
-  else             modoManual(obstaculo);
+  if (apagado)          detenerMotores();
+  else if (modo == 'A') modoAutomatico(obstaculo);
+  else                  modoManual(obstaculo);
 
   actualizarLed();
 
