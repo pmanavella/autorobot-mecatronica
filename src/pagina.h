@@ -9,19 +9,19 @@ const char PAGINA[] PROGMEM = R"rawliteral(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Control AutoRobot</title>
+<title>Control Robot</title>
 <style>
   :root {
-    --bg: #DDE3EA; --ink: #16202F; --muted: #55627A;
+    --bg: #0D1626; --ink: #16202F; --muted: #55627A;
+    --txt-fondo: #E7ECF3; --txt-fondo-suave: #A9B6CC;   /* textos que van sobre el fondo azul oscuro */
     --body: #23314A; --body-hi: #33466B; --panel: #1A2539;
     --key: #F5C542; --key-lo: #C99A1A; --stop: #E8574C; --stop-lo: #A8352D;
     --led-off: #3B4A66; --led-on: #FF5A4E; --ok: #35D07F; --soft: #8E9AB0;
   }
-  @media (prefers-color-scheme: dark) { :root { --bg: #10151D; --ink: #E7ECF3; --muted: #8E9AB0; } }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; }
   body {
-    background: var(--bg); color: var(--ink);
+    background: var(--bg); color: var(--txt-fondo);
     font-family: "Avenir Next", "Segoe UI", Roboto, system-ui, sans-serif;
     display: flex; flex-direction: column; align-items: center;
     padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
@@ -32,7 +32,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
 
   header { width: 100%; max-width: 440px; margin-bottom: 18px; }
   h1 { font-size: 1.6rem; margin: 0; font-weight: 700; line-height: 1.1; }
-  .estado { display: flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--muted); margin-top: 4px; }
+  .estado { display: flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--txt-fondo-suave); margin-top: 4px; }
   .punto { width: 10px; height: 10px; border-radius: 50%; background: var(--stop); flex: none; }
   .estado[data-s="on"] .punto { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 
@@ -79,15 +79,16 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   .apagar:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--stop-lo); }
   .apagar.encender { background: var(--ok); color: var(--ink); box-shadow: 0 5px 0 #23945A; }
   .control.off .pad, .control.off .modos, .control.off .velocidad { opacity: .35; pointer-events: none; }
-  .info { width: 100%; max-width: 440px; margin-top: 18px; font-size: .9rem; color: var(--muted); line-height: 1.5; }
-  .info p { margin: 0 0 6px; } .info strong { color: var(--ink); }
+  .info { width: 100%; max-width: 440px; margin-top: 18px; font-size: .9rem; color: var(--txt-fondo-suave); line-height: 1.5; }
+  .info p { margin: 0 0 6px; } .info strong { color: var(--txt-fondo); }
+  .info h2 { font-size: 1.05rem; font-weight: 700; color: var(--txt-fondo); margin: 18px 0 6px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>AutoRobot</h1>
+  <h1>Control Robot</h1>
   <div class="estado" id="estado" data-s="off" role="status">
     <span class="punto"></span><span id="estadoTxt">Buscando el auto…</span>
   </div>
@@ -118,7 +119,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
 
   <div class="velocidad">
     <label for="vel">Velocidad <output id="velTxt" for="vel">10</output></label>
-    <input type="range" id="vel" min="0" max="20" step="1" value="10">
+    <input type="range" id="vel" min="0" max="40" step="1" value="10">
   </div>
 
   <button class="apagar" id="btnApagar">&#x23FB; Apagar</button>
@@ -126,6 +127,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
 
 <section class="info">
   <p>Última orden: <strong id="ultima">ninguna</strong></p>
+  <h2>¿Cómo manejarlo?</h2>
   <p>Mantené apretada una flecha para mover el auto; al soltarla, frena.
      En modo automático avanza solo y esquiva obstáculos; tocar una flecha lo vuelve a manual.
      Con teclado: flechas o W A S D, y barra espaciadora para parar.
