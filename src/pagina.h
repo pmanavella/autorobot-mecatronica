@@ -59,7 +59,8 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   .modos button[aria-pressed="true"] { background: #E7ECF3; color: var(--ink); }
 
   .pad { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 12px; width: min(100%, 290px); aspect-ratio: 1; margin: 26px auto 28px; transition: opacity .2s; }
-  .pad.auto { opacity: .55; }
+  .pad.auto .tecla:not(.parar) { opacity: .55; }       /* en automático se atenúan las flechas, no el Parar */
+  .pad:not(.auto) .tecla.parar { visibility: hidden; }  /* Parar solo existe en automático (mantiene su lugar en la grilla) */
   .tecla {
     border: 0; border-radius: 18px; background: var(--key); color: var(--ink);
     box-shadow: 0 6px 0 var(--key-lo); font-size: 1.9rem; display: grid; place-items: center;
@@ -79,6 +80,27 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   .apagar:active { transform: translateY(4px); box-shadow: 0 1px 0 var(--stop-lo); }
   .apagar.encender { background: var(--ok); color: var(--ink); box-shadow: 0 5px 0 #23945A; }
   .control.off .pad, .control.off .modos, .control.off .velocidad { opacity: .35; pointer-events: none; }
+  .sonido { margin-top: 22px; background: var(--panel); border-radius: 14px; padding: 14px 16px; }
+  .sonido h2 { font-size: 1rem; margin: 0 0 10px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .sonido h2 span { font-size: .8rem; font-weight: 600; color: var(--soft); }
+  .sonido h2 span.ok { color: var(--ok); }
+  .tipos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--bg); }
+  .tipos button { border: 0; border-radius: 9px; padding: 9px 4px; background: transparent; color: var(--soft); font-weight: 600; font-size: .9rem; }
+  .tipos button[aria-pressed="true"] { background: #E7ECF3; color: var(--ink); }
+  .opcCancion { margin-top: 12px; display: grid; gap: 10px; }
+  .opcCancion[hidden] { display: none; }
+  .archivo { display: flex; align-items: center; gap: 10px; }
+  .archivo span { flex: 1; min-width: 0; font-size: .85rem; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btnChico { border: 0; border-radius: 10px; padding: 9px 14px; background: var(--key); color: var(--ink); font-weight: 700; box-shadow: 0 4px 0 var(--key-lo); flex: none; }
+  .btnChico:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--key-lo); }
+  .check { display: flex; align-items: center; gap: 8px; font-size: .9rem; }
+  .check input { width: 18px; height: 18px; accent-color: var(--key); }
+  .probar { width: 100%; margin-top: 12px; }
+  .rectitud { margin-top: 14px; background: var(--panel); border-radius: 14px; padding: 12px 16px; }
+  .rectitud summary { font-weight: 700; cursor: pointer; }
+  .rectitud p { font-size: .85rem; color: var(--soft); margin: 10px 0 12px; line-height: 1.45; }
+  .rectitud label { display: flex; justify-content: space-between; font-size: .9rem; margin: 12px 0 6px; }
+  .rectitud output { font-weight: 700; color: var(--key); }
   .info { width: 100%; max-width: 440px; margin-top: 18px; font-size: .9rem; color: var(--txt-fondo-suave); line-height: 1.5; }
   .info p { margin: 0 0 6px; } .info strong { color: var(--txt-fondo); }
   .info h2 { font-size: 1.05rem; font-weight: 700; color: var(--txt-fondo); margin: 18px 0 6px; }
@@ -122,6 +144,34 @@ const char PAGINA[] PROGMEM = R"rawliteral(
     <input type="range" id="vel" min="0" max="40" step="1" value="10">
   </div>
 
+  <section class="sonido" aria-label="Sonido de marcha atrás">
+    <h2>Sonido de marcha atrás <span id="audioEstado">Tocá Probar para activarlo</span></h2>
+    <div class="tipos" role="group" aria-label="Qué suena">
+      <button data-tipo="pitido" aria-pressed="true">Pitido</button>
+      <button data-tipo="cancion" aria-pressed="false">Canción</button>
+      <button data-tipo="nada" aria-pressed="false">Nada</button>
+    </div>
+    <div class="opcCancion" id="opcCancion" hidden>
+      <div class="archivo">
+        <span id="nombreCancion">Ninguna canción elegida</span>
+        <button class="btnChico" id="btnElegir">Elegir</button>
+        <input type="file" id="archivo" accept="audio/*" hidden>
+      </div>
+      <label class="check"><input type="checkbox" id="cortar" checked> Cortar cuando deja de ir para atrás</label>
+    </div>
+    <button class="btnChico probar" id="btnProbar">&#128264; Probar sonido</button>
+  </section>
+
+  <details class="rectitud">
+    <summary>Ajuste de rectitud</summary>
+    <p>Si el auto se abre hacia la derecha, mové el ajuste a la derecha (frena la rueda izquierda).
+       Si se abre hacia la izquierda, a la izquierda. Se guarda en el auto.</p>
+    <label for="ajA">Adelante <output id="ajATxt" for="ajA">—</output></label>
+    <input type="range" id="ajA" min="-20" max="20" step="0.5" value="0">
+    <label for="ajR">Atrás <output id="ajRTxt" for="ajR">—</output></label>
+    <input type="range" id="ajR" min="-20" max="20" step="0.5" value="0">
+  </details>
+
   <button class="apagar" id="btnApagar">&#x23FB; Apagar</button>
 </main>
 
@@ -129,9 +179,14 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   <p>Última orden: <strong id="ultima">ninguna</strong></p>
   <h2>¿Cómo manejarlo?</h2>
   <p>Mantené apretada una flecha para mover el auto; al soltarla, frena.
-     En modo automático avanza solo y esquiva obstáculos; tocar una flecha lo vuelve a manual.
+     En modo automático avanza solo y esquiva obstáculos: para frenarlo aparece el botón Parar
+     del medio (vuelve a manual), y tocar una flecha también lo pasa a manual.
      Con teclado: flechas o W A S D, y barra espaciadora para parar.
      Con "Apagar" el auto frena y no obedece nada hasta tocar "Encender".</p>
+  <h2>Sonido de marcha atrás</h2>
+  <p>Emparejá el celular con el parlante Bluetooth y subí el volumen multimedia.
+     Al abrir esta página tocá <strong>Probar sonido</strong> una vez: los celulares no dejan
+     que una página haga ruido hasta que la tocás. La canción elegida queda guardada en este celular.</p>
 </section>
 
 <script>
@@ -202,6 +257,9 @@ const char PAGINA[] PROGMEM = R"rawliteral(
     if (apagado && dir !== 'S') return;
     if (modo === 'A') { setModo('M'); modoLocalHasta = Date.now() + 800; }
     dirActual = dir;
+    // Marcha atrás local: suena ya, sin esperar la respuesta de la ESP32
+    if (dir === 'B') { retroLocalHasta = Date.now() + 700; empezarSonido(); }
+    else retroLocalHasta = 0;
     $('ultima').textContent = NOMBRES[dir];
     marcarTecla(dir);
     if (dir === 'S') {
@@ -236,6 +294,18 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   $('vel').addEventListener('input', () => { $('velTxt').textContent = $('vel').value; });
   $('vel').addEventListener('change', () => { cola.push('V:' + $('vel').value); tick(); });
 
+  // ================= Ajuste de rectitud =================
+  let ajusteSincronizado = false;
+  function textoAjuste(v) {
+    v = Number(v);
+    if (v === 0) return '0 %';
+    return Math.abs(v).toFixed(1) + ' % ' + (v > 0 ? '(frena izq.)' : '(frena der.)');
+  }
+  [['ajA', 'TA:'], ['ajR', 'TR:']].forEach(([id, cmd]) => {
+    $(id).addEventListener('input', () => { $(id + 'Txt').textContent = textoAjuste($(id).value); });
+    $(id).addEventListener('change', () => { cola.push(cmd + $(id).value); tick(); });
+  });
+
   // ================= Apagado =================
   function setApagado(a) {
     apagado = a;
@@ -252,10 +322,17 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   });
 
   // ================= Estado que responde la ESP32 =================
-  // Formato: "E:distancia,moviendo,led,modo,apagado,nivel"   ej: "E:42,1,0,M,0,10"
+  // Formato: "E:distancia,moviendo,led,modo,apagado,nivel,direccion,reversas,ajusteAdelante,ajusteAtras"
+  //   ej: "E:42,1,0,M,0,10,B,3,5.0,3.0"
   function procesar(texto) {
     if (!texto.startsWith('E:')) return;
-    const [d, mov, led, m, off, niv] = texto.slice(2).split(',');
+    const [d, mov, led, m, off, niv, dir, nRev, ajA, ajR] = texto.slice(2).split(',');
+    if (ajR !== undefined && !ajusteSincronizado) {   // al abrir la página, toma los ajustes guardados en el auto
+      $('ajA').value = ajA; $('ajATxt').textContent = textoAjuste(ajA);
+      $('ajR').value = ajR; $('ajRTxt').textContent = textoAjuste(ajR);
+      ajusteSincronizado = true;
+    }
+    if (dir !== undefined) revisarReversa(dir, Number(nRev));
     mostrarDistancia(Number(d));
     $('led').classList.toggle('on', led === '1');
     if ((m === 'A' || m === 'M') && m !== modo && Date.now() > modoLocalHasta) setModo(m);
@@ -287,6 +364,166 @@ const char PAGINA[] PROGMEM = R"rawliteral(
       nota.textContent = 'Camino libre al frente.';
     }
   }
+  // ================= Sonido de marcha atrás =================
+  // El celular está emparejado al parlante Bluetooth: todo lo que suena acá sale por el parlante.
+  // Se dispara de dos formas:
+  //   1) al apretar la flecha Atrás en este celular (inmediato), y
+  //   2) cuando la ESP32 avisa que está retrocediendo (cubre el modo automático).
+  const SONIDO_MIN_MS = 1500;   // aunque retroceda 400 ms, que se llegue a escuchar
+  const guardado = (k, def) => { try { return localStorage.getItem(k) ?? def; } catch (e) { return def; } };
+  const guardar  = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+
+  let tipoSonido = guardado('tipoSonido', 'pitido');   // 'pitido' | 'cancion' | 'nada'
+  let cortarSonido = guardado('cortarSonido', '1') === '1';
+  let retroAuto = false, retroLocalHasta = 0, ultimasReversas = null;
+  let sonando = false, sonidoMinHasta = 0;
+  let ctxAudio = null, osc = null, gan = null, timerPitido = null;
+  let audioListo = false, urlCancion = null;
+  const cancion = new Audio();
+  cancion.preload = 'auto';
+
+  // --- Desbloqueo: los navegadores no reproducen nada hasta que el usuario toca la página ---
+  function silencio() {   // un WAV de 0,05 s en silencio, para "estrenar" el <audio> en iPhone
+    const n = 400, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+    const t = (o, s) => [...s].forEach((c, i) => b[o + i] = c.charCodeAt(0));
+    t(0, 'RIFF'); v.setUint32(4, 36 + n, true); t(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
+    v.setUint16(32, 1, true); v.setUint16(34, 8, true); t(36, 'data'); v.setUint32(40, n, true); b.fill(128, 44);
+    return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+  }
+  function desbloquearAudio() {
+    try {
+      if (!ctxAudio) ctxAudio = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctxAudio.state !== 'running') ctxAudio.resume();
+    } catch (e) {}
+    if (audioListo) return;
+    if (!urlCancion) cancion.src = silencio();
+    cancion.muted = true;
+    cancion.play().then(() => {
+      cancion.muted = false;
+      if (!sonando) { cancion.pause(); cancion.currentTime = 0; }
+      audioListo = true;
+      $('audioEstado').textContent = 'Audio activado';
+      $('audioEstado').classList.add('ok');
+    }).catch(() => { cancion.muted = false; });
+  }
+  ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown'].forEach(ev =>
+    document.addEventListener(ev, desbloquearAudio, { capture: true }));
+
+  // --- Pitido de camión: 1 kHz, 0,4 s sí / 0,4 s no, generado por el celular (no necesita archivo) ---
+  function iniciarPitido() {
+    if (!ctxAudio) return;
+    ctxAudio.resume();
+    gan = ctxAudio.createGain(); gan.gain.value = 0; gan.connect(ctxAudio.destination);
+    osc = ctxAudio.createOscillator(); osc.type = 'square'; osc.frequency.value = 1050;
+    osc.connect(gan); osc.start();
+    let on = false;
+    const alternar = () => { on = !on; if (gan) gan.gain.setTargetAtTime(on ? 0.25 : 0, ctxAudio.currentTime, 0.005); };
+    alternar();
+    timerPitido = setInterval(alternar, 400);
+  }
+  function detenerPitido() {
+    clearInterval(timerPitido); timerPitido = null;
+    if (osc) { try { osc.stop(); } catch (e) {} osc.disconnect(); osc = null; }
+    if (gan) { gan.disconnect(); gan = null; }
+  }
+
+  // --- Canción elegida del celular ---
+  function iniciarCancion() {
+    if (!urlCancion || !cancion.paused) return;   // si sigue sonando (sin cortar), no la reinicia
+    cancion.muted = false; cancion.currentTime = 0;
+    cancion.play().catch(() => {});
+  }
+  function detenerCancion() { cancion.pause(); }
+
+  // --- Lógica común ---
+  function empezarSonido(minimoMs = SONIDO_MIN_MS) {
+    if (sonando || tipoSonido === 'nada') return;
+    sonando = true;
+    sonidoMinHasta = Date.now() + minimoMs;
+    if (tipoSonido === 'pitido') iniciarPitido(); else iniciarCancion();
+  }
+  function terminarSonido() { sonando = false; detenerPitido(); detenerCancion(); }
+
+  function retrocediendo() { return retroAuto || Date.now() < retroLocalHasta; }
+
+  // Se llama con cada respuesta de la ESP32
+  function revisarReversa(dir, reversas) {
+    const huboNueva = ultimasReversas !== null && reversas !== ultimasReversas;  // por si un retroceso cortito pasó entre dos consultas
+    ultimasReversas = reversas;
+    retroAuto = dir === 'B';
+    if (retroAuto || huboNueva) empezarSonido();
+  }
+
+  // Cada 100 ms: ¿hay que callarse?
+  setInterval(() => {
+    if (!sonando || retrocediendo() || Date.now() < sonidoMinHasta) return;
+    if (tipoSonido === 'cancion' && !cortarSonido) { sonando = false; return; }   // la deja terminar
+    terminarSonido();
+  }, 100);
+
+  // --- Guardar la canción en el celular (IndexedDB) para no elegirla cada vez ---
+  function db() {
+    return new Promise((ok, mal) => {
+      const r = indexedDB.open('autoRobot', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('archivos');
+      r.onsuccess = () => ok(r.result); r.onerror = () => mal(r.error);
+    });
+  }
+  async function guardarCancion(dato) {
+    const base = await db();
+    await new Promise((ok, mal) => {
+      const tx = base.transaction('archivos', 'readwrite');
+      tx.objectStore('archivos').put(dato, 'cancion');
+      tx.oncomplete = ok; tx.onerror = () => mal(tx.error);
+    });
+  }
+  async function leerCancion() {
+    const base = await db();
+    return new Promise((ok, mal) => {
+      const r = base.transaction('archivos').objectStore('archivos').get('cancion');
+      r.onsuccess = () => ok(r.result); r.onerror = () => mal(r.error);
+    });
+  }
+  function usarCancion(blob, nombre) {
+    if (urlCancion) URL.revokeObjectURL(urlCancion);
+    urlCancion = URL.createObjectURL(blob);
+    cancion.src = urlCancion;
+    $('nombreCancion').textContent = nombre;
+  }
+
+  // --- Controles ---
+  function mostrarTipo() {
+    document.querySelectorAll('.tipos button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tipo === tipoSonido));
+    $('opcCancion').hidden = tipoSonido !== 'cancion';
+    $('btnProbar').disabled = tipoSonido === 'nada';
+    $('btnProbar').style.opacity = tipoSonido === 'nada' ? .4 : 1;
+  }
+  document.querySelectorAll('.tipos button').forEach(b => b.addEventListener('click', () => {
+    terminarSonido();
+    tipoSonido = b.dataset.tipo; guardar('tipoSonido', tipoSonido);
+    mostrarTipo();
+  }));
+  $('cortar').checked = cortarSonido;
+  $('cortar').addEventListener('change', () => { cortarSonido = $('cortar').checked; guardar('cortarSonido', cortarSonido ? '1' : '0'); });
+  $('btnElegir').addEventListener('click', () => $('archivo').click());
+  $('archivo').addEventListener('change', async () => {
+    const f = $('archivo').files[0];
+    if (!f) return;
+    terminarSonido();
+    const blob = new Blob([await f.arrayBuffer()], { type: f.type || 'audio/mpeg' });
+    usarCancion(blob, f.name);
+    try { await guardarCancion({ nombre: f.name, blob }); } catch (e) { /* si no se puede guardar, igual sirve en esta sesión */ }
+  });
+  $('btnProbar').addEventListener('click', () => {
+    desbloquearAudio();
+    terminarSonido();
+    empezarSonido(3000);
+  });
+
+  mostrarTipo();
+  leerCancion().then(d => { if (d && d.blob) usarCancion(d.blob, d.nombre); }).catch(() => {});
+
   tick();
 </script>
 </body>

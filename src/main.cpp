@@ -7,6 +7,11 @@
   - Hace parpadear un LED SOLO mientras las ruedas se están moviendo.
   - Crea su propia red WiFi ("AutoRobot") y sirve la página de control
     en http://192.168.4.1 (la página está en src/pagina.h).
+  - Informa hacia dónde se mueve (para que la web haga sonar la marcha atrás
+    por el parlante Bluetooth emparejado al celular).
+  - Corrige la diferencia de velocidad entre las ruedas para que vaya recto
+    (un ajuste para adelante y otro para atrás, se calibran desde la web y
+    quedan guardados en la memoria de la ESP32 aunque se apague).
   - Dos modos:
       * Manual (M): el auto obedece las flechas de la web.
         Si hay un obstáculo cerca, no deja avanzar (sí retroceder o girar).
@@ -16,15 +21,22 @@
     /             -> la página de control
     /cmd?o=F      -> orden: F adelante, B atrás, L izquierda, R derecha, S parar,
                      A automático, M manual, V:10 nivel de velocidad (0-40),
-                     OFF apagar, ON encender
+                     OFF apagar, ON encender,
+                     TA:5.0 ajuste de rectitud adelante, TR:3.0 ajuste atrás (en %)
     /estado       -> solo devuelve el estado
-  Cada respuesta es el estado: "E:distancia,moviendo,led,modo,apagado,nivel"
-  ej: "E:42,1,0,M,0,10"
+  Cada respuesta es el estado:
+    "E:distancia,moviendo,led,modo,apagado,nivel,direccion,reversas,ajusteAdelante,ajusteAtras"
+  ej: "E:42,1,0,M,0,10,B,3,5.0,3.0"
+    direccion: F, B, L, R o S (la que tienen ahora los motores)
+    reversas:  cuántas veces empezó a ir para atrás desde que se prendió.
+               Sirve para que la web no se pierda un retroceso corto
+               (en automático retrocede solo 400 ms).
 */
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Preferences.h>   // memoria no volátil de la ESP32 (viene incluida, no hay que instalar nada)
 #include "pagina.h"
 
 // ---------- PINES: MOTOR A (rueda izquierda) ----------
@@ -73,6 +85,18 @@ const unsigned long BLINK_INTERVAL_MS = 250;    // parpadeo del LED al moverse
 const unsigned long TIEMPO_SEGURIDAD_MS = 600;  // manual: sin órdenes -> frena
 const unsigned long TIEMPO_SIN_WEB_MS = 3000;   // automático: si la web desaparece -> frena
 
+// ---------- AJUSTE DE RECTITUD ----------
+// Los dos motores no son idénticos: con el mismo PWM la rueda izquierda gira más rápido
+// y el auto se va abriendo hacia la derecha. El ajuste es cuánto % más lenta queda la
+// rueda rápida respecto de la lenta.
+//   positivo -> la izquierda es la rápida (se frena la izquierda)
+//   negativo -> la derecha es la rápida (se frena la derecha)
+// Son solo los valores de arranque: después se calibran desde la página y se guardan.
+// (primera prueba con 5.0 / 3.0: se pasaba y el auto tiraba a la izquierda)
+const float AJUSTE_ADELANTE_INICIAL = 3.5;
+const float AJUSTE_ATRAS_INICIAL    = 2.0;
+const float AJUSTE_MAX = 20.0;
+
 int nivelAPwm(int n) {
   if (n <= NIVEL_MEDIO)
     return VEL_PWM_MIN + n * (VEL_PWM_MEDIO - VEL_PWM_MIN) / NIVEL_MEDIO;
@@ -93,11 +117,26 @@ bool apagado = false;     // botón de apagado de la web: frena todo e ignora ó
 unsigned long ultimaOrden = 0;     // última flecha / orden recibida
 unsigned long ultimoContacto = 0;  // último pedido cualquiera de la web
 
+// Marcha atrás (lo usa la web para reproducir el sonido)
+char direccion = 'S';              // F, B, L, R o S: lo que están haciendo los motores
+unsigned int contadorReversas = 0; // sube 1 cada vez que EMPIEZA a retroceder
+
+float ajusteAdelante = AJUSTE_ADELANTE_INICIAL;
+float ajusteAtras = AJUSTE_ATRAS_INICIAL;
+Preferences memoria;
+
 WebServer server(80);
 
 // =================================================================
 //  CONTROL DE MOTORES
 // =================================================================
+
+// Cada función de motor avisa hacia dónde va. Solo cuenta una reversa
+// nueva cuando cambia a 'B' (no en cada vuelta del loop).
+void marcarDireccion(char d) {
+  if (d == 'B' && direccion != 'B') contadorReversas++;
+  direccion = d;
+}
 
 void detenerMotores() {
   ledcWrite(CH_MOTOR_A1, 0);
@@ -105,22 +144,41 @@ void detenerMotores() {
   ledcWrite(CH_MOTOR_B1, 0);
   ledcWrite(CH_MOTOR_B2, 0);
   robotEnMovimiento = false;
+  marcarDireccion('S');
+}
+
+// Reparte la corrección entre las dos ruedas para que la velocidad promedio
+// casi no cambie: la rueda lenta sube la mitad del ajuste (sin pasar de 255)
+// y la rápida queda "ajuste" % por debajo de la lenta.
+// Ej: v = 200, ajuste = 5  ->  lenta 205, rápida 194
+void repartirVelocidad(int v, float ajuste, int &vIzq, int &vDer) {
+  float a = fabs(ajuste);
+  int lenta  = min(VEL_PWM_MAX, (int)(v * (1.0 + a / 200.0) + 0.5));
+  int rapida = (int)(lenta * (1.0 - a / 100.0) + 0.5);
+  if (ajuste >= 0) { vIzq = rapida; vDer = lenta; }   // izquierda rápida -> se frena
+  else             { vIzq = lenta;  vDer = rapida; }  // derecha rápida -> se frena
 }
 
 void avanzar(int v) {
-  ledcWrite(CH_MOTOR_A1, v);
+  int vIzq, vDer;
+  repartirVelocidad(v, ajusteAdelante, vIzq, vDer);
+  ledcWrite(CH_MOTOR_A1, vIzq);   // motor A = rueda izquierda
   ledcWrite(CH_MOTOR_A2, 0);
-  ledcWrite(CH_MOTOR_B1, v);
+  ledcWrite(CH_MOTOR_B1, vDer);   // motor B = rueda derecha
   ledcWrite(CH_MOTOR_B2, 0);
   robotEnMovimiento = true;
+  marcarDireccion('F');
 }
 
 void retroceder(int v) {
+  int vIzq, vDer;
+  repartirVelocidad(v, ajusteAtras, vIzq, vDer);
   ledcWrite(CH_MOTOR_A1, 0);
-  ledcWrite(CH_MOTOR_A2, v);
+  ledcWrite(CH_MOTOR_A2, vIzq);
   ledcWrite(CH_MOTOR_B1, 0);
-  ledcWrite(CH_MOTOR_B2, v);
+  ledcWrite(CH_MOTOR_B2, vDer);
   robotEnMovimiento = true;
+  marcarDireccion('B');
 }
 
 // Gira sobre su propio eje (una rueda adelante, otra atrás)
@@ -130,6 +188,7 @@ void girarDerecha(int v) {
   ledcWrite(CH_MOTOR_B1, 0);
   ledcWrite(CH_MOTOR_B2, v);   // derecha retrocede
   robotEnMovimiento = true;
+  marcarDireccion('R');
 }
 
 void girarIzquierda(int v) {
@@ -138,6 +197,7 @@ void girarIzquierda(int v) {
   ledcWrite(CH_MOTOR_B1, v);   // derecha avanza
   ledcWrite(CH_MOTOR_B2, 0);
   robotEnMovimiento = true;
+  marcarDireccion('L');
 }
 
 void aplicarOrden(char orden, int v) {
@@ -192,9 +252,10 @@ void actualizarLed() {
 // =================================================================
 
 String textoEstado() {
-  char msg[48];
-  snprintf(msg, sizeof(msg), "E:%ld,%d,%d,%c,%d,%d",
-           distanciaActual, robotEnMovimiento, ledEncendido, modo, apagado, nivel);
+  char msg[80];
+  snprintf(msg, sizeof(msg), "E:%ld,%d,%d,%c,%d,%d,%c,%u,%.1f,%.1f",
+           distanciaActual, robotEnMovimiento, ledEncendido, modo, apagado, nivel,
+           direccion, contadorReversas, ajusteAdelante, ajusteAtras);
   return String(msg);
 }
 
@@ -206,6 +267,12 @@ void procesarOrden(String orden) {
   if (orden.startsWith("V:")) {
     nivel = constrain(orden.substring(2).toInt(), 0, NIVEL_MAX);
     velocidad = nivelAPwm(nivel);
+  } else if (orden.startsWith("TA:")) {
+    ajusteAdelante = constrain(orden.substring(3).toFloat(), -AJUSTE_MAX, AJUSTE_MAX);
+    memoria.putFloat("ajAdel", ajusteAdelante);
+  } else if (orden.startsWith("TR:")) {
+    ajusteAtras = constrain(orden.substring(3).toFloat(), -AJUSTE_MAX, AJUSTE_MAX);
+    memoria.putFloat("ajAtras", ajusteAtras);
   } else if (orden == "OFF") {
     apagado = true;
     modo = 'M';
@@ -334,6 +401,14 @@ void setup() {
   ledcAttachPin(MOTOR_A_IN2, CH_MOTOR_A2);
   ledcAttachPin(MOTOR_B_IN1, CH_MOTOR_B1);
   ledcAttachPin(MOTOR_B_IN2, CH_MOTOR_B2);
+
+  // Ajustes de rectitud guardados (si nunca se calibró, usa los iniciales)
+  memoria.begin("robot", false);
+  // Si quieren volver a los valores del código e ignorar lo guardado desde la web,
+  // descomenten la línea siguiente, suban el código una vez y después vuelvan a comentarla.
+  // memoria.clear();
+  ajusteAdelante = memoria.getFloat("ajAdel", AJUSTE_ADELANTE_INICIAL);
+  ajusteAtras    = memoria.getFloat("ajAtras", AJUSTE_ATRAS_INICIAL);
 
   detenerMotores();
   Serial.println("Robot listo.");
